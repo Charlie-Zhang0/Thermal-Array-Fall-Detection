@@ -193,6 +193,7 @@ while True:
         box_buffer = ()
         detect_fifo.clear()
         
+    # TODO: Fall detection
     if len(detect_fifo) == detect_fifo_size:
         print(detect_fifo)
 
