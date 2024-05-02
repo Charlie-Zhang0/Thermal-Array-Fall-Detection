@@ -1,24 +1,26 @@
 import serial
-import time
+from datetime import datetime
 import ast
 import numpy as np
 import cv2
+import paho.mqtt.client as mqtt
 from collections import deque
 
 
 port = 'COM3'
 baud_rate = 921600
 
-# in terms of frames, FPS ~= 6
-input_fifo_size = 2
-detect_fifo_size = 10
-background_delay = 1
-Threshold = 32
-smallBox = (4, 2)
-minIoU = 0.25
+# All in terms of frames, FPS ~= 6
+input_fifo_size = 3
+detect_fifo_size = 3 # How "Fast" the fall is
+background_delay = 10 # Sample length of background
+demo_time = background_delay
+Threshold = 24 # "Hot or "Cold"
 
+fall_portion = 0.30 # How "Big" the fall is
+smallBox = (6, 2) # Minimum size to be considered as a human
+minIoU = 0.25 # Minimum portion of overlaping between frames
 
-# Confident_Human_Size =
 
 
 class ReadLine:
@@ -104,10 +106,16 @@ def average_fifo(fifo):
 
 input_fifo = deque(maxlen=input_fifo_size)
 background = np.zeros((24, 32, background_delay))
-i = 0
+i,j = 0,0
 ser = serial.Serial(port, baud_rate, timeout=1)
 box_buffer = ()  # (x, y, w, h)
 detect_fifo = deque(maxlen=detect_fifo_size)
+mqttBroker = "172.20.10.2"
+client = mqtt.Client(client_id="board")
+client.connect(mqttBroker, 1883)
+
+client.publish("flask/fall","hello")
+
 
 
 while True:
@@ -140,25 +148,29 @@ while True:
 
         # Background Removal
         Detected_temperature -= np.average(background, axis=2)
-
+        if j > demo_time:
         # Naive CFAR
-        Detected_temperature = np.where(Detected_temperature < Threshold, 0, 1)
+        # This if is for demo
+            Detected_temperature = np.where(Detected_temperature < Threshold, 0, 1)
+            # Graphics coloring
+            ira_expand = Detected_temperature*160 + 32
+        else:
+            ira_expand = Detected_temperature + 36
+            j+=1
 
-        # Graphics coloring
-        ira_expand = Detected_temperature*160 + 32
-
-    # Rectangle Bounding, Discard small boxes
+    # Rectangle Bounding
     Detected_temperature = (Detected_temperature).astype(np.uint8)
     contours, _ = cv2.findContours(
         Detected_temperature, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     bounding_boxes = [cv2.boundingRect(c) for c in contours]
 
+    # Discard small boxes
     # Bool IsTarget = False
     filtered_boxes = [(x, y, w, h, False) for (x, y, w, h) in filter_boxes_by_size(
         bounding_boxes, min_size=smallBox)]
 
-    # Have something to do
+    # Target Tracking
     if filtered_boxes != []:
         # First encountering Objs
         if box_buffer == ():
@@ -193,9 +205,13 @@ while True:
         box_buffer = ()
         detect_fifo.clear()
         
-    # TODO: Fall detection
     if len(detect_fifo) == detect_fifo_size:
-        print(detect_fifo)
+        if ((detect_fifo[-1][0] - detect_fifo[0][0]) / detect_fifo[0][1]) > fall_portion:
+            print((detect_fifo[-1][0] - detect_fifo[0][0])/ detect_fifo[0][1]) 
+            c = datetime.now()
+            current_time = c.strftime('%H:%M:%S')
+            current_date = c.strftime("%d/%m/%Y")
+            client.publish("flask/fall", (current_date+" "+current_time))
 
     # Graphics
     ira_expand = np.repeat(ira_expand, 32, 0)
